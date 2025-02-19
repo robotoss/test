@@ -21,6 +21,8 @@ import 'package:flutter/services.dart';
 ///      then types "22" -> returns "22/|MM/yyyy"
 ///   4) If the user entered day = 31 and then month = 2 (February), the day
 ///      will be adjusted to 28 or 29 for a leap year.
+///   5) The cursor position is calculated so that it follows the user input
+///      even if the user inserts or deletes digits in the middle of the text.
 ///
 class DateMaskTextInputFormatter extends TextInputFormatter {
   final String mask;
@@ -159,14 +161,10 @@ class DateMaskTextInputFormatter extends TextInputFormatter {
 
     final finalText = buffer.toString();
 
-    // Calculate new cursor position
-    // Here is a simplified logic: we put the cursor after the nth digit that the user typed
-    int newCursorPos = _calculateCursorPosition(newValue, finalText, tokens);
-
-    // Make sure we don't exceed the text length
-    if (newCursorPos > finalText.length) {
-      newCursorPos = finalText.length;
-    }
+    // Calculate the new cursor position based on how many digits are to the left of
+    // the original selection in the newValue (unformatted). This ensures the cursor
+    // follows the user's input.
+    final newCursorPos = _calculateCursorPosition(newValue, finalText);
 
     return TextEditingValue(
       text: finalText,
@@ -219,27 +217,41 @@ class DateMaskTextInputFormatter extends TextInputFormatter {
     return value.toString().padLeft(width, '0');
   }
 
-  /// Calculates cursor position based on how many digits the user has typed.
-  /// We look for the position of the nth digit/placeholder in the final string.
-  int _calculateCursorPosition(
-      TextEditingValue newValue, String finalText, List<_MaskToken> tokens) {
-    // How many digits did the user input?
-    final digitCount = _extractDigits(newValue.text).length;
+  /// Calculates the new cursor position so that it follows
+  /// the user's input. We look at how many digits are to the left of
+  /// the selection in [newValue], then position the cursor at the
+  /// corresponding digit index in the formatted [finalText].
+  int _calculateCursorPosition(TextEditingValue newValue, String finalText) {
+    // Count how many digits were typed before the current cursor in newValue
+    final rawText = newValue.text; // unformatted text (with possible separators)
+    final cursorIndex = newValue.selection.start;
 
-    int count = 0;
-    int pos = 0;
-
-    for (int i = 0; i < finalText.length; i++) {
-      final ch = finalText[i];
-      // If it's a digit or '_', we consider it part of the numeric fields
-      if (RegExp(r'[0-9_]').hasMatch(ch)) {
-        count++;
-      }
-      if (count == digitCount) {
-        pos = i + 1;
+    // How many digits are to the left of cursorIndex in rawText?
+    int digitCountBeforeCursor = 0;
+    for (int i = 0; i < cursorIndex && i < rawText.length; i++) {
+      if (RegExp(r'[0-9]').hasMatch(rawText[i])) {
+        digitCountBeforeCursor++;
       }
     }
-    return pos;
+
+    // Now, we walk through finalText (the formatted text) and find
+    // the position that corresponds to digitCountBeforeCursor
+    int currentDigitCount = 0;
+    for (int i = 0; i < finalText.length; i++) {
+      if (RegExp(r'[0-9_]').hasMatch(finalText[i])) {
+        // We treat digits and placeholders '_' as digit positions
+        if (currentDigitCount == digitCountBeforeCursor) {
+          // Place the cursor right here
+          return i;
+        }
+        currentDigitCount++;
+      }
+    }
+
+    // If we reach the end without placing the cursor,
+    // it means the user typed more digits than fit, or
+    // the cursor is beyond all digits. Just put cursor at the end.
+    return finalText.length;
   }
 }
 
